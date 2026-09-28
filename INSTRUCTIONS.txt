@@ -1,0 +1,54 @@
+# 🚀 วิธี Push ขึ้น GitHub (แบบมีภาพ)
+
+## 1. สร้าง Repository บน GitHub
+1. เปิด [https://github.com/new](https://github.com/new)
+2. กรอก:
+   - Repository name: `line-stock-bot`
+   - **เลือก Private** 🔒
+   - ❌ อย่าแตก Add a README
+3. กด **Create repository**
+4. หน้าถัดมาจะแสดงคำสั่ง — **อย่าเพิ่งกดอะไร**
+
+## 2. บนเครื่องคุณ — รัน batch file นี้
+1. เปิด Command Prompt (cmd)
+2. วางคำสั่งนี้:
+
+```
+cd /d "D:\สำหรับรับงานลูกค้า\Line Stock Greenleaf"
+```
+
+3. แก้ filename ใน `push-to-github.bat`:
+   - เปิดไฟล์ `push-to-github.bat` ด้วย Notepad
+   - เปลี่ยน `PLACEHOLDER_USERNAME` เป็น **ชื่อ GitHub ของคุณ**
+   - บันทึก
+4. ดับเบิ้ลคลิก `push-to-github.bat` เพื่อรัน
+
+## 3. ตั้ง Secrets บน GitHub
+1. เข้า repo → **Settings** → **Secrets and variables** → **Actions**
+2. กด **New repository secret** → เพิ่ม:
+
+| ชื่อ | ค่า |
+|------|------|
+| `CF_ACCOUNT_ID` | จาก [dash.cloudflare.com](https://dash.cloudflare.com) หน้าแรก |
+| `CF_API_TOKEN` | สร้างที่ [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens) |
+
+**สร้าง CF_API Token อย่างไร:**
+1. เข้า [dash.cloudflare.com/profile/api-tokens](https://dash.cloudflare.com/profile/api-tokens)
+2. กด **Create token** → เลือก **Custom token**
+3. Permissions: **D1 → Read**
+4. Resources: เลือก Account → บัญชีของคุณ
+5. กด **Create token** → คัดลอก → วางใน GitHub Secret
+
+## 4. ตรวจสอบ
+- ไปที่แท็บ **Actions** ใน GitHub repo
+- จะเห็น `Daily D1 Backup` กำลังรัน ✅
+- ทุกวัน 03:00 น. จะสร้าง backup อัตโนมัติ
+- ไฟล์ backup เก็บใน **Artifacts** (90 วัน)
+
+---
+
+## ❌ ถ้าไม่มี GitHub เลย
+ถ้ายังไม่มีบัญชี GitHub:
+1. ไปสมัครที่ [github.com/join](https://github.com/join)
+2. ใช้เวลาสมัครประมาณ 2 นาที
+3. กลับมาทำตามขั้นตอนข้างบน
