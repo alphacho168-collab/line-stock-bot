@@ -184,10 +184,11 @@ export async function createProduct(db: D1Database, input: Partial<Product>): Pr
     const dupBc = await db.prepare('SELECT id FROM products WHERE barcode = ?').bind(input.barcode.trim()).first();
     if (dupBc) throw new AppError(`บาร์โค้ด ${input.barcode.trim()} ถูกใช้ไปแล้ว`);
   }
-  const row = await db
+  const photo = typeof input.photo === 'string' ? input.photo.trim() || null : null;
+  const newId = await db
     .prepare(
       `INSERT INTO products (sku, barcode, name, category, unit, min_qty, note, photo)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING *`,
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
     )
     .bind(
       sku,
@@ -197,9 +198,14 @@ export async function createProduct(db: D1Database, input: Partial<Product>): Pr
       input.unit?.trim() || 'ชิ้น',
       Number(input.min_qty ?? 0),
       input.note?.trim() || null,
+      photo,
     )
-    .first<Product>();
-  return row!;
+    .first<{ id: number }>();
+
+  if (!newId) throw new AppError('สร้างสินค้าไม่สำเร็จ');
+  const product = await db.prepare('SELECT * FROM products WHERE id = ?').bind(newId.id).first<Product>();
+  if (!product) throw new AppError('ไม่พบสินค้าที่สร้าง');
+  return product;
 }
 
 async function nextSku(db: D1Database): Promise<string> {
