@@ -7,7 +7,7 @@ export interface LineMessage {
   [k: string]: unknown;
 }
 
-async function call(env: Env, path: string, body: unknown): Promise<void> {
+async function call(env: Env, path: string, body: unknown): Promise<{ ok: boolean; detail: string }> {
   const res = await fetch(`${API}${path}`, {
     method: 'POST',
     headers: {
@@ -17,16 +17,41 @@ async function call(env: Env, path: string, body: unknown): Promise<void> {
     body: JSON.stringify(body),
   });
   if (!res.ok) {
-    console.error('LINE API error', path, res.status, await res.text());
+    const detail = `${res.status} ${await res.text()}`;
+    console.error('LINE API error', path, detail);
+    return { ok: false, detail };
   }
+  return { ok: true, detail: '' };
+}
+
+/**
+ * ถ้า LINE ปฏิเสธข้อความ (เช่น การ์ด Flex ผิดสเปก) ผู้ใช้จะไม่เห็นอะไรเลย
+ * และเราจะไม่รู้ว่าเกิดอะไรขึ้น — ตรงนี้จะลองส่งใหม่เป็นข้อความธรรมดาแทน
+ */
+async function send(
+  env: Env,
+  path: string,
+  envelope: Record<string, unknown>,
+  messages: LineMessage[],
+): Promise<void> {
+  const clipped = messages.slice(0, 5);
+  const first = await call(env, path, { ...envelope, messages: clipped });
+  if (first.ok) return;
+
+  const flat = clipped.map((m) => m.altText).filter(Boolean).join('\n');
+  const text = flat || 'ขออภัยครับ ระบบขัดข้องชั่วคราว ลองใหม่อีกครั้งนะครับ';
+  const retry = clipped.some((m) => m.type !== 'text')
+    ? await call(env, path, { ...envelope, messages: [{ type: 'text', text: text.slice(0, 5000) }] })
+    : null;
+  if (retry && !retry.ok) console.error('fallback text also failed', retry.detail);
 }
 
 export function reply(env: Env, replyToken: string, messages: LineMessage[]): Promise<void> {
-  return call(env, '/message/reply', { replyToken, messages: messages.slice(0, 5) });
+  return send(env, '/message/reply', { replyToken }, messages);
 }
 
 export function push(env: Env, to: string, messages: LineMessage[]): Promise<void> {
-  return call(env, '/message/push', { to, messages: messages.slice(0, 5) });
+  return send(env, '/message/push', { to }, messages);
 }
 
 export async function getProfile(

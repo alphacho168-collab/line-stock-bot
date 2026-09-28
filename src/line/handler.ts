@@ -42,8 +42,15 @@ export async function handleEvent(env: Env, event: any, origin: string): Promise
 
   const ctx: Ctx = { env, db, chatKey, userId: source.userId ?? null, userName, origin };
 
+  // กันบั๊กเงียบ: ถ้าการ์ดผิดสเปก LINE จะไม่ส่งให้ผู้ใช้เลย — เตือนใน log ก่อน
+  const sendChecked = async (token: string, messages: LineMessage[]): Promise<void> => {
+    const errs = messages.flatMap((m, i) => F.validateFlex(m, `messages[${i}]`));
+    if (errs.length) console.error('Flex spec error — ผู้ใช้จะเห็นแค่ข้อความสำรอง', errs);
+    await reply(env, token, messages);
+  };
+
   if (event.type === 'follow' || event.type === 'join') {
-    await reply(env, event.replyToken, [
+    await sendChecked(event.replyToken, [
       F.text(`สวัสดีครับ${userName ? ' คุณ' + userName : ''} 👋\nผมคือผู้ช่วยจัดการสต๊อก พิมพ์คำสั่งสั้น ๆ ได้เลย`),
       F.helpMessage(liffUrl(env)),
     ]);
@@ -51,14 +58,22 @@ export async function handleEvent(env: Env, event: any, origin: string): Promise
   }
 
   if (event.type === 'postback') {
-    const messages = await handlePostback(ctx, new URLSearchParams(event.postback?.data ?? ''));
-    if (messages.length) await reply(env, event.replyToken, messages);
+    const messages = await handlePostback(ctx, new URLSearchParams(event.postback?.data ?? '')).catch(async (err) => {
+      console.error('handlePostback error', err);
+      await repo.clearDraft(db, chatKey).catch(() => {});
+      return [F.text('ขออภัยครับ เกิดข้อผิดพลาดชั่วคราว ลองใหม่อีกครั้งนะครับ')];
+    });
+    if (messages.length) await sendChecked(event.replyToken, messages);
     return;
   }
 
   if (event.type === 'message' && event.message?.type === 'text') {
-    const messages = await handleText(ctx, String(event.message.text ?? ''));
-    if (messages.length) await reply(env, event.replyToken, messages);
+    const messages = await handleText(ctx, String(event.message.text ?? '')).catch(async (err) => {
+      console.error('handleText error', err);
+      await repo.clearDraft(db, chatKey).catch(() => {});
+      return [F.text('ขออภัยครับ เกิดข้อผิดพลาดชั่วคราว ลองใหม่อีกครั้งนะครับ')];
+    });
+    if (messages.length) await sendChecked(event.replyToken, messages);
     return;
   }
 }
@@ -152,11 +167,7 @@ async function handleText(ctx: Ctx, raw: string): Promise<LineMessage[]> {
         return [F.text('พิมพ์ชื่อสินค้าที่ต้องการเช็คต่อท้ายได้เลยครับ เช่น  เช็ค ปากกา')];
       }
       const items = await repo.searchProducts(db, intent.query, 8);
-      if (items.length === 0) {
-        return [
-          F.text(`ไม่พบสินค้าที่ตรงกับ "${intent.query}"\nลองพิมพ์คำสั้นลง หรือเพิ่มสินค้าใหม่ในแดชบอร์ด`),
-        ];
-      }
+      if (items.length === 0) return notFoundMessage(ctx, intent.query, 'view');
       if (items.length === 1) return [await productMessage(ctx, items[0].id)];
       const token = randomToken(8);
       await repo.saveDraft(db, {
@@ -270,6 +281,34 @@ async function productMessage(ctx: Ctx, productId: number): Promise<LineMessage>
   return F.productCard(card, levels, liffUrl(ctx.env), photoUrl(ctx, card));
 }
 
+/**
+ * หาไม่เจอ → ไม่ปล่อยให้เป็นทางตัน
+ * แสดงรายการสินค้าทั้งหมด (พร้อมรูป) ให้ผู้ใช้กดเลือกเองได้
+ * เหตุผลที่ต้องมี: ชื่อสินค้ากับที่ผู้ใช้พิมพ์มักไม่ตรงกันเป๊ะ (เช่น พิมพ์ "เครื่องสำอาง"
+ * แต่สินค้าชื่อ "Moon Flore Mask") การให้เห็นรายการพร้อมรูปคือทางออกที่ใช้ได้จริง
+ */
+async function notFoundMessage(
+  ctx: Ctx,
+  query: string,
+  action: ActionType | 'view',
+): Promise<LineMessage[]> {
+  const all = await repo.listProducts(ctx.db, { limit: 8 });
+  if (all.length === 0) {
+    return [F.text(`ไม่พบสินค้าที่ตรงกับ "${query}"\nยังไม่มีสินค้าในระบบ — เพิ่มได้ที่แดชบอร์ด: ${liffUrl(ctx.env)}`)];
+  }
+  const token = randomToken(8);
+  await repo.saveDraft(ctx.db, {
+    lineUserId: ctx.chatKey,
+    token,
+    step: 'pick_product',
+    payload: action === 'view' ? { action: 'issue', query, view: true } : { action, query },
+  });
+  return [
+    F.text(`ไม่พบสินค้าที่ตรงกับ "${query}"\nด้านล่างคือสินค้าที่มีอยู่ในระบบ — แตะที่ตรงกับที่ต้องการได้เลยครับ`),
+    F.productPicker(all, action, token, action === 'view' ? 'เลือกสินค้าที่ต้องการดู' : 'เลือกสินค้าที่ต้องการ', ctx.origin),
+  ];
+}
+
 /** เดินหน้าไปยังขั้นตอนถัดไปของร่างรายการ */
 async function advance(ctx: Ctx, draft: Draft): Promise<LineMessage[]> {
   const { db } = ctx;
@@ -281,7 +320,7 @@ async function advance(ctx: Ctx, draft: Draft): Promise<LineMessage[]> {
     const items = await repo.searchProducts(db, p.query, 8);
     if (items.length === 0) {
       await repo.clearDraft(db, ctx.chatKey);
-      return [F.text(`ไม่พบสินค้าที่ตรงกับ "${p.query}"\nลองพิมพ์คำสั้นลง หรือเพิ่มสินค้าใหม่ในแดชบอร์ด`)];
+      return notFoundMessage(ctx, p.query, p.action);
     }
     if (items.length > 1) {
       draft.step = 'pick_product';

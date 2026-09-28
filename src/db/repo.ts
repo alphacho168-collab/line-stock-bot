@@ -1,6 +1,32 @@
 import type { Actor, Draft, DraftPayload, DraftStep, Location, MovementType, Product } from '../types';
 import { AppError, makeRef, norm } from '../lib/util';
 
+/**
+ * SQLite (ตัวที่ D1 ใช้) จำกัดความยาวรูปแบบ LIKE ไว้ที่ 50 ไบต์
+ * เกินนี้จะได้ error "LIKE or GLOB pattern too complex" ทั้งคำขอ — ไม่ใช่แค่ไม่เจอผลลัพธ์
+ * ภาษาไทย 1 ตัวอักษร = 3 ไบต์ จึงเหลือราว 14 ตัวอักษร (เผื่อ `%` สองข้างไว้ด้วย)
+ * ตัดแล้วยังค้นเจอ เพราะรูปแบบมี % ครอบอยู่แล้ว เช่นค้นว่า "น้ำยาทำความสะอาดพื้น"
+ * จะถูกตัดเป็น "น้ำยาทำความสะ" ซึ่งยังเป็นส่วนหนึ่งของชื่อสินค้าเดิม
+ */
+const LIKE_MAX_BYTES = 44;
+
+/** ตัดข้อความไม่ให้เกินจำนวนไบต์ โดยตัดที่ขอบเขตอักขระ UTF-8 (อย่าให้ภาษาไทยขาดกลางคำ) */
+function clipBytes(s: string, max = LIKE_MAX_BYTES): string {
+  const enc = new TextEncoder();
+  if (enc.encode(s).length <= max) return s;
+  let out = '';
+  for (const ch of s) {
+    if (enc.encode(out + ch).length > max) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** สร้างรูปแบบ `%คำค้น%` ที่ยาวไม่เกินลิมิตของ SQLite */
+function like(term: string): string {
+  return `%${clipBytes(term)}%`;
+}
+
 /* ------------------------------------------------------------------ users */
 
 export async function ensureUser(
@@ -118,8 +144,9 @@ export async function searchProducts(db: D1Database, query: string, limit = 20):
   const where: string[] = ['p.active = 1'];
   const binds: unknown[] = [];
   for (const t of terms) {
+    const pat = like(t);
     where.push('(LOWER(p.name) LIKE ? OR LOWER(p."sku") LIKE ? OR LOWER(p.category) LIKE ? OR p.barcode = ?)');
-    binds.push(`%${t}%`, `%${t}%`, `%${t}%`, t);
+    binds.push(pat, pat, pat, clipBytes(t));
   }
   const sql = `
     SELECT p.*,
@@ -135,7 +162,7 @@ export async function searchProducts(db: D1Database, query: string, limit = 20):
            ELSE 2 END,
       p.name
     LIMIT ?`;
-  const q = norm(query);
+  const q = clipBytes(norm(query));
   const { results } = await db
     .prepare(sql)
     .bind(...binds, q, q, q, `${q}%`, limit)
@@ -153,8 +180,8 @@ export async function listProducts(
 
   if (opts.q && opts.q.trim()) {
     where.push('(LOWER(p.name) LIKE ? OR LOWER(p."sku") LIKE ? OR LOWER(p.category) LIKE ? OR p.barcode LIKE ?)');
-    const like = `%${norm(opts.q)}%`;
-    binds.push(like, like, like, like);
+    const pat = like(norm(opts.q));
+    binds.push(pat, pat, pat, pat);
   }
 
   const qtyExpr = opts.locationId

@@ -3,6 +3,7 @@ import type { Env } from './types';
 import { api } from './api/routes';
 import { verifySignature } from './line/client';
 import { handleEvent, simulate } from './line/handler';
+import { validateFlex } from './line/flex';
 import * as repo from './db/repo';
 import { AppError } from './lib/util';
 
@@ -77,7 +78,10 @@ app.post('/line/simulate', async (c) => {
   if (c.env.ENVIRONMENT !== 'dev') return c.json({ error: 'ไม่พบเส้นทางนี้' }, 404);
   const body = await c.req.json<{ user?: string; text?: string; postback?: string }>();
   const messages = await simulate(c.env, body.user ?? 'Utest0000000000000000000000000001', body, new URL(c.req.url).origin);
-  return c.json({ messages });
+  // ตรวจสเปกการ์ดให้เห็นทันทีตอนพัฒนา — LINE จะปฏิเสธการ์ดผิดแบบเงียบ ๆ
+  const flexErrors = messages.flatMap((m, i) => validateFlex(m, `messages[${i}]`));
+  if (flexErrors.length) console.warn('Flex spec warnings', flexErrors);
+  return c.json({ messages, flexErrors });
 });
 
 /* ------------------------------------------------------------ REST API */

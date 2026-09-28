@@ -121,33 +121,108 @@ function wrap(altText: string, bubble: Flex, withQuickReply = true): Flex {
   return msg;
 }
 
+/* ------------------------------------------------------ ตัวตรวจสเปก LINE */
+
+const COMPONENT_TYPES = new Set([
+  'box', 'button', 'image', 'video', 'icon', 'text', 'span', 'separator', 'filler',
+]);
+/** ชนิดที่อยู่เหนือ component 1 ชั้น (ไม่ต้องตรวจซ้ำ) */
+const OUTER_TYPES = new Set(['flex', 'bubble', 'carousel', 'text', 'sticker', 'quickReply', 'quickReplyButton', 'action']);
+const IMAGE_SIZES = new Set([
+  'xxs', 'xs', 'sm', 'md', 'lg', 'xl', 'xxl', '3xl', '4xl', '5xl', 'full',
+]);
+const TEXT_SIZES = new Set(['xxs', 'xs', 'sm', 'md', 'lg', 'xl', 'xxl', '3xl', '4xl', '5xl']);
+const BLOCK_KEYS = ['header', 'hero', 'body', 'footer'];
+
+/**
+ * ตรวจการ์ดก่อนส่ง — เพราะ LINE ถ้าส่งผิดสเปกจะ "ปฏิเสธทั้งข้อความเงียบ ๆ"
+ * ผู้ใช้เห็นแค่ความเงียบ ไม่รู้ว่าบอทพัง เราเลยต้องจับปัญหาตรงนี้ให้ได้ก่อน
+ * คืนรายการข้อความเตือน (ว่าง = ผ่าน)
+ */
+export function validateFlex(flex: unknown, path = '$'): string[] {
+  const errs: string[] = [];
+  const visit = (node: any, at: string): void => {
+    if (!node || typeof node !== 'object') return;
+
+    // contents เป็นได้ทั้ง array (กล่องย่อย) และ object (bubble/carousel ชั้นเดียว)
+    if (Array.isArray(node.contents)) {
+      for (const child of node.contents) visit(child, at);
+    } else if (node.contents && typeof node.contents === 'object') {
+      visit(node.contents, `${at}.contents`);
+    }
+    // hero/header/body/footer เป็น block ที่บรรจุ component ได้
+    for (const key of BLOCK_KEYS) {
+      if (node[key]) {
+        const child = node[key];
+        if (child.type !== 'box' && child.type !== 'image' && child.type !== 'video') {
+          errs.push(`${at}.${key}: block ต้องเป็น box/image/video แต่ได้ "${child.type}"`);
+        }
+        if (key === 'hero' && child.type === 'image' && child.size !== 'full') {
+          errs.push(`${at}.hero: size ต้องเป็น "full" เท่านั้น แต่ได้ "${child.size}"`);
+        }
+        visit(child, `${at}.${key}`);
+      }
+    }
+
+    if (typeof node.type === 'string') {
+      if (!COMPONENT_TYPES.has(node.type) && !OUTER_TYPES.has(node.type)) {
+        errs.push(`${at}: component type "${node.type}" ไม่รู้จัก`);
+      }
+      if (node.type === 'image') {
+        if (typeof node.url !== 'string' || !/^https?:\/\//.test(node.url)) {
+          errs.push(`${at}.url: ต้องเป็นลิงก์ http(s) ได้`);
+        }
+        if (typeof node.size === 'string' && !IMAGE_SIZES.has(node.size) && !/^\d+(\.\d+)?(px|%)$/.test(node.size)) {
+          errs.push(`${at}.size: ขนาดรูป "${node.size}" ไม่ถูกต้อง`);
+        }
+        if (typeof node.aspectRatio === 'string' && !/^\d+:\d+$/.test(node.aspectRatio)) {
+          errs.push(`${at}.aspectRatio: ต้องเป็น ตัวเลข:ตัวเลข เช่น 20:13 แต่ได้ "${node.aspectRatio}"`);
+        }
+      }
+      if (node.type === 'text' && typeof node.size === 'string' && !TEXT_SIZES.has(node.size)) {
+        errs.push(`${at}.size: ขนาดตัวอักษร "${node.size}" ไม่ถูกต้อง`);
+      }
+    }
+  };
+  visit(flex, path);
+
+  const size = JSON.stringify((flex as any)?.contents ?? flex).length;
+  if (size > 30 * 1024) errs.push(`bubble ใหญ่ ${size} bytes เกินลิมิต LINE (30 KB)`);
+  return errs;
+}
+
 function stockColor(qty: number, minQty: number): string {
   if (qty <= 0) return C.danger;
   if (minQty > 0 && qty <= minQty) return C.warn;
   return C.ok;
 }
 
-/** รูปใหญ่บนสุดของการ์ด — แตะแล้วเปิดดูขนาดเต็ม */
+/**
+ * รูปใหญ่บนสุดของการ์ด (hero block)
+ *
+ * สำคัญ: hero เป็น "ช่อง" ใน bubble ไม่ใช่ชนิด component แยก
+ * ต้องใส่เป็น component `image` ธรรมดา และ `size` ของ hero ต้องเป็น `full` เท่านั้น
+ * ถ้าใส่ผิด LINE จะปฏิเสธข้อความทั้งก้อน → ผู้ใช้ไม่เห็นอะไรเลย
+ */
 function heroBlock(url: string): Flex {
   return {
-    type: 'hero',
+    type: 'image',
     url,
-    size: 'cover',
+    size: 'full',
     aspectRatio: '20:13',
+    aspectMode: 'cover',
     action: { type: 'uri', label: 'เปิดดูรูปขนาดเต็ม', uri: url },
   };
 }
 
-/** รูปย่อ 64px สำหรับแถวในการ์ดเลือกสินค้า */
+/** รูปย่อ 64px สำหรับแถวในการ์ดเลือกสินค้า (size ของ image ใช้ px ได้) */
 function thumbBlock(url: string): Flex {
   return {
     type: 'image',
     url,
-    size: 'cover',
+    size: '64px',
     aspectRatio: '1:1',
-    width: '64px',
-    height: '64px',
-    cornerRadius: '8px',
+    aspectMode: 'cover',
   };
 }
 
