@@ -1,22 +1,40 @@
 name: 📦 Daily D1 Backup
 
+# รันทุกวัน 10:20 น. เวลาไทย (= 03:20 น. UTC)
 on:
   schedule:
-    - cron: '0 3 * * *'  # ทุกวัน 03:00 น. UTC
-  workflow_dispatch:      # กดรันเองได้จากแท็บ Actions
+    - cron: '20 3 * * *'
+  workflow_dispatch: # กดสั่งเองได้จากแท็บ Actions ถ้าจำเป็น
+
+permissions:
+  contents: read
 
 jobs:
   backup:
     runs-on: ubuntu-latest
     steps:
-      - name: ⏳ สร้าง Backup ฐานข้อมูล D1
-        uses: cloudflare/wrangler-action@v3
+      - name: ⚙️ ติดตั้ง Node.js 22
+        uses: actions/setup-node@v4
         with:
-          apiToken: ${{ secrets.CF_API_TOKEN }}
-          command: |
-            wrangler d1 backup create line-stock --output backup_$(date +%Y%m%d_%H%M%S).sql
-          accountId: ${{ secrets.CF_ACCOUNT_ID }}
-        
-      - name: ✅ Backup สำเร็จ
-        if: success()
-        run: echo "Backup completed successfully!"
+          node-version: '22'
+
+      - name: 📥 ติดตั้ง Wrangler (เครื่องมือของ Cloudflare)
+        run: npm install -g wrangler@4
+
+      - name: ⬇️ ดึงข้อมูลทั้งหมดออกมาเป็นไฟล์ .sql
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        # --remote = ดึงจากฐานข้อมูลจริงบนอินเทอร์เน็ต (ไม่ใช่ของทดลองบนเครื่อง)
+        run: wrangler d1 export line-stock --remote --output "backup_$(date +%Y%m%d_%H%M%S).sql"
+
+      - name: 📤 เก็บไฟล์สำรองไว้บน GitHub 90 วัน
+        uses: actions/upload-artifact@v4
+        with:
+          name: d1-backup-${{ github.run_number }}
+          path: backup_*.sql
+          retention-days: 90
+          if-no-files-found: error # ถ้าไม่ได้ไฟล์ = ถือว่าล้มเหลว จะได้เห็นสันทันที
+
+      - name: ✅ สำรองสำเร็จ
+        run: echo "สำรองฐานข้อมูลเรียบร้อย"
