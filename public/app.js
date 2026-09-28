@@ -536,11 +536,23 @@ function openProductForm(product = null) {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
-    const body = Object.fromEntries(new FormData(form).entries());
-    body.min_qty = Number(body.min_qty || 0);
-    if (body.initial_qty !== undefined) body.initial_qty = Number(body.initial_qty || 0);
-    if (body.location_id !== undefined) body.location_id = Number(body.location_id || 0);
+    const btn = form.querySelector('button[type="submit"]');
+    const originalLabel = btn?.textContent;
+    if (btn) { btn.disabled = true; btn.textContent = 'กำลังบันทึก...'; }
     try {
+      const body = Object.fromEntries(new FormData(form).entries());
+      body.min_qty = Number(body.min_qty || 0);
+      if (body.initial_qty !== undefined) body.initial_qty = Number(body.initial_qty || 0);
+      if (body.location_id !== undefined) body.location_id = Number(body.location_id || 0);
+
+      // ไฟล์รูปต้องแปลงเป็น base64 ก่อน เพราะ JSON.stringify ทำกับ File ไม่ได้
+      const file = form.querySelector('input[name="photo"]')?.files?.[0];
+      if (file) {
+        body.photo = await fileToBase64(file);
+      } else {
+        delete body.photo;
+      }
+
       if (product) await api(`/products/${p.id}`, { method: 'PUT', body: JSON.stringify(body) });
       else await api('/products', { method: 'POST', body: JSON.stringify(body) });
       closeSheet();
@@ -548,7 +560,33 @@ function openProductForm(product = null) {
       await refreshAll();
     } catch (err) {
       toast(err.message, 'error');
+    } finally {
+      if (btn) { btn.disabled = false; btn.textContent = originalLabel; }
     }
+  });
+}
+
+/** อ่านไฟล์รูป ย่อขนาดให้เหลือราว 400px แล้วแปลงเป็น base64 เพื่อส่งผ่าน JSON */
+function fileToBase64(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('อ่านไฟล์รูปไม่สำเร็จ'));
+    reader.onload = () => {
+      const img = new Image();
+      img.onerror = () => reject(new Error('รูปนี้เปิดไม่ได้ ลองเป็นไฟล์ JPG หรือ PNG'));
+      img.onload = () => {
+        const MAX = 400;
+        const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+        const canvas = document.createElement('canvas');
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+        resolve(canvas.toDataURL('image/jpeg', 0.7));
+      };
+      img.src = reader.result;
+    };
+    reader.readAsDataURL(file);
   });
 }
 

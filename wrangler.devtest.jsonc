@@ -1,0 +1,28 @@
+// ไฟล์นี้ใช้สำหรับทดสอบบนเครื่องตัวเองเท่านั้น (ไม่มีความลับอยู่ในไฟล์)
+// ใช้คำสั่ง: npx wrangler dev --config wrangler.devtest.jsonc --local
+// ENVIRONMENT=dev ทำให้เปิดหน้าแดชบอร์ดในเบราว์เซอร์ปกติได้โดยไม่ต้องล็อกอินผ่าน LINE
+{
+  "name": "line-stock",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "line-stock",
+      "database_id": "81e0520b-c388-48f9-8e61-9fa0b4fd7fde",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "dev",
+    "LINE_LOGIN_CHANNEL_ID": "2011732532",
+    "LIFF_ID": "2011732532-ULwmjHGL",
+    "DEV_LINE_USER_ID": "Udevtest123",
+    "DEV_LINE_DISPLAY_NAME": "ทดสอบ"
+  }
+}

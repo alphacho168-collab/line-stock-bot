@@ -93,7 +93,9 @@ api.get('/products/:id', async (c) => {
 
 api.post('/products', async (c) => {
   const body = await c.req.json<Record<string, unknown>>();
-  const product = await repo.createProduct(c.env.DB, { ...body, photo: (body.photo as string) ?? null } as Partial<Product>);
+  const photo = typeof body.photo === 'string' && body.photo.startsWith('data:image/') ? body.photo : null;
+  if (photo && photo.length > 400_000) throw new AppError('รูปใหญ่เกินไป กรุณาเลือกรูปที่เล็กกว่า');
+  const product = await repo.createProduct(c.env.DB, { ...body, photo } as Partial<Product>);
   // ตั้งยอดเริ่มต้นถ้าระบุมา
   const initialQty = Number((body as Record<string, unknown>).initial_qty ?? 0);
   const locationId = Number((body as Record<string, unknown>).location_id ?? 0);
@@ -107,8 +109,13 @@ api.post('/products', async (c) => {
 });
 
 api.put('/products/:id', async (c) => {
-  const body = await c.req.json<Record<string, never>>();
-  return c.json(await repo.updateProduct(c.env.DB, Number(c.req.param('id')), body));
+  const body = await c.req.json<Record<string, unknown>>();
+  if ('photo' in body) {
+    const photo = typeof body.photo === 'string' && body.photo.startsWith('data:image/') ? body.photo : null;
+    if (photo && photo.length > 400_000) throw new AppError('รูปใหญ่เกินไป กรุณาเลือกรูปที่เล็กกว่า');
+    body.photo = photo;
+  }
+  return c.json(await repo.updateProduct(c.env.DB, Number(c.req.param('id')), body as Partial<Product>));
 });
 
 api.delete('/products/:id', async (c) => {

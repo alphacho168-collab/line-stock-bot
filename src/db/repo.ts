@@ -101,7 +101,7 @@ export async function searchProducts(db: D1Database, query: string, limit = 20):
   const where: string[] = ['p.active = 1'];
   const binds: unknown[] = [];
   for (const t of terms) {
-    where.push('(LOWER(p.name) LIKE ? OR LOWER(p.sku) LIKE ? OR LOWER(p.category) LIKE ? OR p.barcode = ?)');
+    where.push('(LOWER(p.name) LIKE ? OR LOWER(p."sku") LIKE ? OR LOWER(p.category) LIKE ? OR p.barcode = ?)');
     binds.push(`%${t}%`, `%${t}%`, `%${t}%`, t);
   }
   const sql = `
@@ -112,7 +112,7 @@ export async function searchProducts(db: D1Database, query: string, limit = 20):
     WHERE ${where.join(' AND ')}
     ORDER BY
       CASE WHEN LOWER(p.name) = ? THEN 0
-           WHEN LOWER(p.sku)  = ? THEN 0
+           WHEN LOWER(p."sku")  = ? THEN 0
            WHEN p.barcode     = ? THEN 0
            WHEN LOWER(p.name) LIKE ? THEN 1
            ELSE 2 END,
@@ -135,7 +135,7 @@ export async function listProducts(
   const where: string[] = ['p.active = 1'];
 
   if (opts.q && opts.q.trim()) {
-    where.push('(LOWER(p.name) LIKE ? OR LOWER(p.sku) LIKE ? OR LOWER(p.category) LIKE ? OR p.barcode LIKE ?)');
+    where.push('(LOWER(p.name) LIKE ? OR LOWER(p."sku") LIKE ? OR LOWER(p.category) LIKE ? OR p.barcode LIKE ?)');
     const like = `%${norm(opts.q)}%`;
     binds.push(like, like, like, like);
   }
@@ -170,7 +170,7 @@ export async function getProduct(db: D1Database, id: number): Promise<Product | 
 
 export async function getProductByBarcode(db: D1Database, barcode: string): Promise<Product | null> {
   return db
-    .prepare('SELECT * FROM products WHERE (barcode = ? OR sku = ?) AND active = 1')
+    .prepare('SELECT * FROM products WHERE (barcode = ? OR "sku" = ?) AND active = 1')
     .bind(barcode.trim(), barcode.trim())
     .first<Product>();
 }
@@ -178,7 +178,7 @@ export async function getProductByBarcode(db: D1Database, barcode: string): Prom
 export async function createProduct(db: D1Database, input: Partial<Product>): Promise<Product> {
   if (!input.name?.trim()) throw new AppError('กรุณาระบุชื่อสินค้า');
   const sku = input.sku?.trim() || (await nextSku(db));
-  const dup = await db.prepare('SELECT id FROM products WHERE sku = ?').bind(sku).first();
+  const dup = await db.prepare('SELECT id FROM products WHERE "sku" = ?').bind(sku).first();
   if (dup) throw new AppError(`รหัสสินค้า ${sku} ถูกใช้ไปแล้ว`);
   if (input.barcode?.trim()) {
     const dupBc = await db.prepare('SELECT id FROM products WHERE barcode = ?').bind(input.barcode.trim()).first();
@@ -221,9 +221,12 @@ export async function updateProduct(db: D1Database, id: number, patch: Partial<P
     const dup = await db.prepare('SELECT id FROM products WHERE barcode = ? AND id != ?').bind(barcode, id).first();
     if (dup) throw new AppError(`บาร์โค้ด ${barcode} ถูกใช้ไปแล้ว`);
   }
+  const photo = patch.photo !== undefined
+    ? typeof patch.photo === 'string' ? patch.photo.trim() || null : current.photo
+    : current.photo;
   await db
     .prepare(
-      `UPDATE products SET sku = ?, barcode = ?, name = ?, category = ?, unit = ?, min_qty = ?, note = ?, active = ?,
+      `UPDATE products SET "sku" = ?, barcode = ?, name = ?, category = ?, unit = ?, min_qty = ?, note = ?, photo = ?, active = ?,
          updated_at = datetime('now') WHERE id = ?`,
     )
     .bind(
@@ -234,6 +237,7 @@ export async function updateProduct(db: D1Database, id: number, patch: Partial<P
       (patch.unit ?? current.unit).trim(),
       Number(patch.min_qty ?? current.min_qty),
       patch.note !== undefined ? patch.note?.trim() || null : current.note,
+      photo,
       patch.active ?? current.active,
       id,
     )
@@ -481,7 +485,7 @@ export async function listMovements(
   if (opts.locationId) { where.push('m.location_id = ?'); binds.push(opts.locationId); }
   const sql = `
     SELECT m.id, m.ref, m.type, m.qty, m.delta, m.balance_after, m.note, m.actor_name, m.source, m.created_at,
-           p.name AS product_name, p.sku, p.unit, l.name AS location_name, l.code AS location_code
+           p.name AS product_name, p."sku" AS sku, p.unit, l.name AS location_name, l.code AS location_code
     FROM movements m
     JOIN products p ON p.id = m.product_id
     JOIN locations l ON l.id = m.location_id
