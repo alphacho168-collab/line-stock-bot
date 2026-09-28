@@ -1,0 +1,1 @@
+Start-Process -FilePath "C:\Program Files\Git\bin\bash.exe" -ArgumentList '-c', 'cd "/d/สำหรับรับงานลูกค้า/Line Stock Greenleaf/line-stock-bot/richmenu" && python3 install_richmenu.py' -Wait -NoNewWindow

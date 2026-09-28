@@ -1,0 +1,20 @@
+{
+  "size": { "width": 2500, "height": 1686 },
+  "selected": true,
+  "name": "Stock Bot",
+  "chatBarText": "Menu",
+  "areas": [
+    { "bounds": { "x": 0, "y": 0, "width": 833, "height": 843 },
+      "action": { "type": "uri", "label": "Dashboard", "uri": "https://liff.line.me/2011732532-ULwmjHGL" } },
+    { "bounds": { "x": 833, "y": 0, "width": 834, "height": 843 },
+      "action": { "type": "postback", "label": "Check", "data": "a=noop&k=check", "inputOption": "openKeyboard", "fillInText": "check " } },
+    { "bounds": { "x": 1667, "y": 0, "width": 833, "height": 843 },
+      "action": { "type": "postback", "label": "Issue", "data": "a=noop&k=issue", "inputOption": "openKeyboard", "fillInText": "issue " } },
+    { "bounds": { "x": 0, "y": 843, "width": 833, "height": 843 },
+      "action": { "type": "postback", "label": "Receive", "data": "a=noop&k=receive", "inputOption": "openKeyboard", "fillInText": "receive " } },
+    { "bounds": { "x": 833, "y": 843, "width": 834, "height": 843 },
+      "action": { "type": "message", "label": "Low", "text": "low" } },
+    { "bounds": { "x": 1667, "y": 843, "width": 833, "height": 843 },
+      "action": { "type": "message", "label": "Help", "text": "help" } }
+  ]
+}

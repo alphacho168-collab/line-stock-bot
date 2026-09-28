@@ -1,0 +1,28 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "line-stock",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-01",
+  "observability": { "enabled": true },
+  "triggers": {
+    "crons": ["0 3 * * *"]
+  },
+  "assets": {
+    "directory": "./public",
+    "binding": "ASSETS",
+    "not_found_handling": "none"
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "line-stock",
+      "database_id": "81e0520b-c388-48f9-8e61-9fa0b4fd7fde",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "vars": {
+    "ENVIRONMENT": "production",
+    "LINE_LOGIN_CHANNEL_ID": "2011732532",
+    "LIFF_ID": "2011732532-ULwmjHGL"
+  }
+}
