@@ -1,5 +1,6 @@
 import type { ActionType, Draft, DraftPayload, Env } from '../types';
 import * as repo from '../db/repo';
+import type { ProductWithStock } from '../db/repo';
 import * as F from './flex';
 import { getProfile, reply, type LineMessage } from './client';
 import { parse } from './parser';
@@ -15,11 +16,18 @@ interface Ctx {
   chatKey: string;
   userId: string | null;
   userName: string | null;
+  /** ที่อยู่เว็บของ Worker ใช้สร้างลิงก์รูปสินค้า */
+  origin: string;
+}
+
+/** ลิงก์รูปสินค้า — คืน undefined ถ้าสินค้านั้นไม่มีรูป (LINE จะได้ไม่แสดงรูป) */
+function photoUrl(ctx: Ctx, product: { id: number; has_photo?: number }): string | undefined {
+  return product.has_photo ? `${ctx.origin}/photo/${product.id}` : undefined;
 }
 
 /* --------------------------------------------------------- event router */
 
-export async function handleEvent(env: Env, event: any): Promise<void> {
+export async function handleEvent(env: Env, event: any, origin: string): Promise<void> {
   const db = env.DB;
   const source = event.source ?? {};
   const chatKey: string | undefined = source.userId ?? source.groupId ?? source.roomId;
@@ -32,7 +40,7 @@ export async function handleEvent(env: Env, event: any): Promise<void> {
     await repo.ensureUser(db, source.userId, userName, profile?.pictureUrl ?? null);
   }
 
-  const ctx: Ctx = { env, db, chatKey, userId: source.userId ?? null, userName };
+  const ctx: Ctx = { env, db, chatKey, userId: source.userId ?? null, userName, origin };
 
   if (event.type === 'follow' || event.type === 'join') {
     await reply(env, event.replyToken, [
@@ -60,8 +68,9 @@ export async function simulate(
   env: Env,
   chatKey: string,
   input: { text?: string; postback?: string },
+  origin: string,
 ): Promise<LineMessage[]> {
-  const ctx: Ctx = { env, db: env.DB, chatKey, userId: chatKey, userName: 'ผู้ทดสอบ' };
+  const ctx: Ctx = { env, db: env.DB, chatKey, userId: chatKey, userName: 'ผู้ทดสอบ', origin };
   if (input.postback !== undefined) return handlePostback(ctx, new URLSearchParams(input.postback));
   return handleText(ctx, input.text ?? '');
 }
@@ -156,7 +165,7 @@ async function handleText(ctx: Ctx, raw: string): Promise<LineMessage[]> {
         step: 'pick_product',
         payload: { action: 'issue', query: intent.query, view: true },
       });
-      return [F.productPicker(items, 'view', token, 'เลือกสินค้าที่ต้องการดู')];
+      return [F.productPicker(items, 'view', token, 'เลือกสินค้าที่ต้องการดู', ctx.origin)];
     }
 
     case 'action': {
@@ -249,11 +258,16 @@ async function handlePostback(ctx: Ctx, data: URLSearchParams): Promise<LineMess
 /* -------------------------------------------------------- flow engine */
 
 async function productMessage(ctx: Ctx, productId: number): Promise<LineMessage> {
-  const product = await repo.getProduct(ctx.db, productId);
+  const product = await repo.getProductLite(ctx.db, productId);
   if (!product) return F.text('ไม่พบสินค้านี้แล้วครับ');
   const levels = await repo.getLevels(ctx.db, productId);
   const total = levels.reduce((sum, l) => sum + l.qty, 0);
-  return F.productCard({ ...product, total_qty: total, location_count: levels.filter((l) => l.qty > 0).length }, levels, liffUrl(ctx.env));
+  const card: ProductWithStock & { total_qty: number } = {
+    ...product,
+    total_qty: total,
+    location_count: levels.filter((l) => l.qty > 0).length,
+  };
+  return F.productCard(card, levels, liffUrl(ctx.env), photoUrl(ctx, card));
 }
 
 /** เดินหน้าไปยังขั้นตอนถัดไปของร่างรายการ */
@@ -272,7 +286,7 @@ async function advance(ctx: Ctx, draft: Draft): Promise<LineMessage[]> {
     if (items.length > 1) {
       draft.step = 'pick_product';
       await repo.saveDraft(db, draft);
-      return [F.productPicker(items, p.view ? 'view' : p.action, draft.token)];
+      return [F.productPicker(items, p.view ? 'view' : p.action, draft.token, undefined, ctx.origin)];
     }
     p.productId = items[0].id;
   }
@@ -283,7 +297,7 @@ async function advance(ctx: Ctx, draft: Draft): Promise<LineMessage[]> {
     return [await productMessage(ctx, p.productId)];
   }
 
-  const product = await repo.getProduct(db, p.productId);
+  const product = await repo.getProductLite(db, p.productId);
   if (!product) {
     await repo.clearDraft(db, ctx.chatKey);
     return [F.text('ไม่พบสินค้านี้แล้วครับ')];
@@ -359,6 +373,7 @@ async function advance(ctx: Ctx, draft: Draft): Promise<LineMessage[]> {
       minQty: product.min_qty,
       note: p.note,
       token: draft.token,
+      photoUrl: photoUrl(ctx, product),
     }),
   ];
 }

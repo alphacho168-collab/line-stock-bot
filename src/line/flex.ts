@@ -127,6 +127,30 @@ function stockColor(qty: number, minQty: number): string {
   return C.ok;
 }
 
+/** รูปใหญ่บนสุดของการ์ด — แตะแล้วเปิดดูขนาดเต็ม */
+function heroBlock(url: string): Flex {
+  return {
+    type: 'hero',
+    url,
+    size: 'cover',
+    aspectRatio: '20:13',
+    action: { type: 'uri', label: 'เปิดดูรูปขนาดเต็ม', uri: url },
+  };
+}
+
+/** รูปย่อ 64px สำหรับแถวในการ์ดเลือกสินค้า */
+function thumbBlock(url: string): Flex {
+  return {
+    type: 'image',
+    url,
+    size: 'cover',
+    aspectRatio: '1:1',
+    width: '64px',
+    height: '64px',
+    cornerRadius: '8px',
+  };
+}
+
 /* -------------------------------------------------------------- bubbles */
 
 export function helpMessage(liffUrl: string): Flex {
@@ -184,9 +208,10 @@ export function helpMessage(liffUrl: string): Flex {
 }
 
 export function productCard(
-  product: ProductWithStock | (ProductWithStock & { total_qty: number }),
+  product: ProductWithStock & { total_qty: number },
   levels: LevelRow[],
   liffUrl: string,
+  photoUrl?: string,
 ): Flex {
   const total = product.total_qty ?? 0;
   const color = stockColor(total, product.min_qty);
@@ -210,6 +235,7 @@ export function productCard(
   const bubble: Flex = {
     type: 'bubble',
     size: 'mega',
+    ...(photoUrl ? { hero: heroBlock(photoUrl) } : {}),
     body: {
       type: 'box',
       layout: 'vertical',
@@ -258,6 +284,9 @@ export function productCard(
         ...(product.barcode
           ? [{ type: 'text', text: `บาร์โค้ด ${product.barcode}`, size: 'xxs', color: C.muted, margin: 'lg' }]
           : []),
+        ...(product.note
+          ? [{ type: 'text', text: `หมายเหตุ: ${product.note}`, size: 'xxs', color: C.muted, margin: 'sm', wrap: true }]
+          : []),
       ],
     },
     footer: {
@@ -288,6 +317,7 @@ export function productPicker(
   action: ActionType | 'view',
   token: string,
   hint?: string,
+  photoBase?: string,
 ): Flex {
   const meta = action === 'view' ? VIEW_META : ACTION_META[action];
   const rows = items.slice(0, 8).map((p) => ({
@@ -299,21 +329,36 @@ export function productPicker(
     margin: 'sm',
     action: { type: 'postback', data: pb({ a: 'pick_product', t: token, pid: p.id }) },
     contents: [
-      { type: 'text', text: p.name, size: 'sm', weight: 'bold', color: C.ink, wrap: true },
       {
         type: 'box',
         layout: 'horizontal',
-        margin: 'xs',
+        spacing: 'md',
         contents: [
-          { type: 'text', text: p.sku, size: 'xxs', color: C.muted, flex: 5 },
+          ...(photoBase && p.has_photo ? [thumbBlock(`${photoBase}/photo/${p.id}`)] : []),
           {
-            type: 'text',
-            text: `คงเหลือ ${fmtQty(p.total_qty)} ${p.unit}`,
-            size: 'xxs',
-            color: stockColor(p.total_qty, p.min_qty),
-            align: 'end',
-            flex: 6,
-            weight: 'bold',
+            type: 'box',
+            layout: 'vertical',
+            flex: 1,
+            contents: [
+              { type: 'text', text: p.name, size: 'sm', weight: 'bold', color: C.ink, wrap: true },
+              {
+                type: 'box',
+                layout: 'horizontal',
+                margin: 'xs',
+                contents: [
+                  { type: 'text', text: p.sku, size: 'xxs', color: C.muted, flex: 5 },
+                  {
+                    type: 'text',
+                    text: `คงเหลือ ${fmtQty(p.total_qty)} ${p.unit}`,
+                    size: 'xxs',
+                    color: stockColor(p.total_qty, p.min_qty),
+                    align: 'end',
+                    flex: 6,
+                    weight: 'bold',
+                  },
+                ],
+              },
+            ],
           },
         ],
       },
@@ -424,6 +469,7 @@ export interface ConfirmView {
   minQty: number;
   note?: string | null;
   token: string;
+  photoUrl?: string;
 }
 
 export function confirmCard(v: ConfirmView): Flex {
@@ -441,6 +487,7 @@ export function confirmCard(v: ConfirmView): Flex {
   const bubble: Flex = {
     type: 'bubble',
     size: 'mega',
+    ...(v.photoUrl ? { hero: heroBlock(v.photoUrl) } : {}),
     header: header('ตรวจสอบก่อนยืนยัน', `${meta.icon} ${meta.label}`, meta.color),
     body: {
       type: 'box',

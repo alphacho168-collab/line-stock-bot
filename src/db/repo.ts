@@ -91,7 +91,24 @@ export async function deleteLocation(db: D1Database, id: number): Promise<void> 
 
 /* --------------------------------------------------------------- products */
 
-export interface ProductWithStock extends Product {
+/** สินค้าแบบไม่หิ้วรูป (รูปเป็น base64 ยาวมาก ไม่ควรส่งไปพร้อมรายการ) */
+export interface ProductLite extends Omit<Product, 'photo'> {
+  /** 1 = มีรูป, 0 = ไม่มี — ใช้ตัดสินใจว่าจะใส่รูปในการ์ดหรือไม่ */
+  has_photo: number;
+}
+
+/** แถวผลลัพธ์ดิบจาก `SELECT p.*` — ยังมีรูปอยู่ จะถูกตัดทิ้งทีเดียวใน lite() */
+type RowWithPhoto<T> = T & Pick<Product, 'photo'>;
+
+/** ตัดรูปออกจากผลลัพธ์ เหลือไว้แค่ธงว่ามีรูปไหม ลดขนาดข้อมูลลงหลายสิบเท่า */
+function lite<T>(rows: RowWithPhoto<T>[]): (Omit<T, 'photo'> & { has_photo: number })[] {
+  return rows.map((row) => {
+    const { photo, ...rest } = row;
+    return { ...rest, has_photo: photo ? 1 : 0 };
+  });
+}
+
+export interface ProductWithStock extends ProductLite {
   total_qty: number;
   location_count: number;
 }
@@ -122,8 +139,8 @@ export async function searchProducts(db: D1Database, query: string, limit = 20):
   const { results } = await db
     .prepare(sql)
     .bind(...binds, q, q, q, `${q}%`, limit)
-    .all<ProductWithStock>();
-  return results ?? [];
+    .all<RowWithPhoto<ProductWithStock>>();
+  return lite<ProductWithStock>(results ?? []) as ProductWithStock[];
 }
 
 export async function listProducts(
@@ -160,12 +177,18 @@ export async function listProducts(
     LIMIT ?`;
 
   // ลำดับ bind: qtyExpr อยู่ใน SELECT จึงมาก่อน WHERE
-  const { results } = await db.prepare(sql).bind(...qtyBinds, ...binds, limit).all<ProductWithStock>();
-  return results ?? [];
+  const { results } = await db.prepare(sql).bind(...qtyBinds, ...binds, limit).all<RowWithPhoto<ProductWithStock>>();
+  return lite<ProductWithStock>(results ?? []) as ProductWithStock[];
 }
 
 export async function getProduct(db: D1Database, id: number): Promise<Product | null> {
   return db.prepare('SELECT * FROM products WHERE id = ?').bind(id).first<Product>();
+}
+
+/** ดึงสินค้าแบบไม่ดึงรูป — ใช้ในฝั่งแชท LINE ที่ไม่ต้องการ base64 */
+export async function getProductLite(db: D1Database, id: number): Promise<ProductLite | null> {
+  const rows = await db.prepare('SELECT * FROM products WHERE id = ?').bind(id).all<Product>();
+  return (lite(rows.results ?? [])[0] as ProductLite | undefined) ?? null;
 }
 
 export async function getProductByBarcode(db: D1Database, barcode: string): Promise<Product | null> {
@@ -509,8 +532,8 @@ export async function lowStockProducts(db: D1Database, limit = 50): Promise<Prod
        LIMIT ?`,
     )
     .bind(limit)
-    .all<ProductWithStock>();
-  return results ?? [];
+    .all<RowWithPhoto<ProductWithStock>>();
+  return lite<ProductWithStock>(results ?? []) as ProductWithStock[];
 }
 
 export interface Summary {

@@ -10,6 +10,34 @@ const app = new Hono<{ Bindings: Env }>();
 
 app.get('/healthz', (c) => c.json({ ok: true, service: 'line-stock' }));
 
+/* ------------------------------------------------------------ รูปสินค้า */
+
+/**
+ * เสิร์ฟรูปสินค้าเป็นลิงก์ https สำหรับให้ LINE แสดงในการ์ด
+ * LINE ไม่ยอมรับ base64 ใน Flex Message — ต้องเป็น URL เท่านั้น
+ * เปิดสาธารณะ (LINE โหลดรูปโดยไม่ส่ง token มาด้วย) แต่รูปสินค้าไม่ใช่ข้อมูลลับ
+ */
+app.get('/photo/:id', async (c) => {
+  const id = Number(c.req.param('id'));
+  if (!Number.isInteger(id) || id <= 0) return c.text('ไม่พบรูป', 404);
+  const row = await c.env.DB
+    .prepare('SELECT photo FROM products WHERE id = ? AND active = 1')
+    .bind(id)
+    .first<{ photo: string | null }>();
+  const m = row?.photo ? /^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/.exec(row.photo) : null;
+  if (!m) return c.text('ไม่พบรูป', 404);
+  const bin = atob(m[2]);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Response(bytes, {
+    headers: {
+      'content-type': m[1],
+      'cache-control': 'public, max-age=31536000, immutable',
+      'access-control-allow-origin': '*',
+    },
+  });
+});
+
 /* ------------------------------------------------------- LINE webhook */
 
 app.post('/line/webhook', async (c) => {
@@ -26,12 +54,13 @@ app.post('/line/webhook', async (c) => {
   const events = body.events ?? [];
 
   // ตอบ 200 ทันทีตามที่ LINE ต้องการ แล้วประมวลผลต่อเบื้องหลัง
+  const origin = new URL(c.req.url).origin;
   c.executionCtx.waitUntil(
     (async () => {
       for (const event of events) {
         try {
           if (event.webhookEventId && (await repo.isDuplicateEvent(c.env.DB, event.webhookEventId))) continue;
-          await handleEvent(c.env, event);
+          await handleEvent(c.env, event, origin);
         } catch (err) {
           console.error('handleEvent error', err);
         }
@@ -47,7 +76,7 @@ app.post('/line/webhook', async (c) => {
 app.post('/line/simulate', async (c) => {
   if (c.env.ENVIRONMENT !== 'dev') return c.json({ error: 'ไม่พบเส้นทางนี้' }, 404);
   const body = await c.req.json<{ user?: string; text?: string; postback?: string }>();
-  const messages = await simulate(c.env, body.user ?? 'Utest0000000000000000000000000001', body);
+  const messages = await simulate(c.env, body.user ?? 'Utest0000000000000000000000000001', body, new URL(c.req.url).origin);
   return c.json({ messages });
 });
 
