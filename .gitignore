@@ -7,3 +7,8 @@ dist/
 # config production ส่วนตัว (ห้ามขึ้น git)
 wrangler.prod.jsonc
 *.local.md
+
+# ไฟล์ผลลัพธ์จากการรันคำสั่ง (เผลอสร้างขึ้น ไม่ต้องเก็บ)
+stdout.txt
+stderr.txt
+*.log
