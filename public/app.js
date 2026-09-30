@@ -14,6 +14,7 @@ const state = {
   locations: [],
   filters: { q: '', status: 'all', locationId: '' },
   historyType: 'all',
+  report: { period: 'week', offset: 0, sort: 'issued', kind: 'issued', data: null },
   summary: null,
 };
 
@@ -273,7 +274,7 @@ function renderSettingsLocations(byLocation = []) {
     .join('');
 }
 
-/* ------------------------------------------------------------ ประวัติ */
+/* ------------------------------------------------------------- ประวัติ */
 
 async function renderHistory() {
   const list = $('#historyList');
@@ -284,6 +285,120 @@ async function renderHistory() {
       ? rows
       : rows.filter((r) => (state.historyType === 'transfer' ? r.type.startsWith('transfer') : r.type === state.historyType));
   list.innerHTML = filtered.length ? filtered.map(movementRow).join('') : '<div class="empty">ไม่มีรายการ</div>';
+}
+
+/* ------------------------------------------------------------ รายงาน */
+
+async function renderReport() {
+  const r = state.report;
+  if (!r.data) {
+    $('#reportTrend').innerHTML = '<div class="skeleton" style="height:120px"></div>';
+    $('#reportList').innerHTML = '<div class="skeleton"></div>';
+  }
+  try {
+    r.data = await api(`/report?period=${r.period}&offset=${r.offset}`);
+    paintReport();
+  } catch (err) {
+    $('#reportTrend').innerHTML = `<div class="empty">${esc(err.message)}</div>`;
+    $('#reportList').innerHTML = '';
+    toast(err.message, 'error');
+  }
+}
+
+function paintReport() {
+  const { data, sort, period, offset, kind } = state.report;
+  if (!data) return;
+  const { range, rows, trend, totals } = data;
+
+  $('#reportTitle').textContent = range.label;
+  $('#reportSub').textContent = range.sub;
+  $('#reportPrev').disabled = !range.canPrev;
+  $('#reportNext').disabled = !range.canNext;
+  $$('#reportPeriod button').forEach((b) => b.classList.toggle('is-active', b.dataset.period === period));
+  $$('#reportSort .chip').forEach((c) => c.classList.toggle('is-active', c.dataset.sort === sort));
+  $$('#reportKind button').forEach((b) => b.classList.toggle('is-active', b.dataset.kind === kind));
+
+  $('#reportStats').innerHTML =
+    statTile('เบิกออกรวม', fmt(totals.issued), `${totals.issuedProducts} รายการมีการเบิก`, 'danger') +
+    statTile('รับเข้ารวม', fmt(totals.received), 'ของที่เข้ามาในช่วงนี้', 'ok') +
+    statTile('หน่วยคงเหลือ', fmt(totals.units), `${totals.products} รายการที่ใช้งานอยู่`, '') +
+    statTile('ปรับยอด / ย้ายคลัง', `${fmt(totals.adjusted)} / ${fmt(totals.moved)}`, 'รวมช่วงที่เลือก', '');
+
+  const maxVal = Math.max(1, ...trend.map((t) => Number(t[kind])));
+  const labelEvery = trend.length > 16 ? Math.ceil(trend.length / 6) : 1;
+  const isRecv = kind === 'received';
+  $('#reportTrend').innerHTML = trend.length
+    ? `<div class="bars__plot">${trend
+        .map(
+          (t) =>
+            `<div class="bar" title="${esc(t.label)} — เบิก ${fmt(t.issued)} · รับ ${fmt(t.received)}">
+               <div class="bar__fill${Number(t[kind]) ? (isRecv ? ' bar__fill--received' : '') : ' bar__fill--zero'}" style="height:${(Number(t[kind]) / maxVal) * 100}%"></div>
+             </div>`,
+        )
+        .join('')}</div>
+       <div class="bars__labels">${trend
+         .map((t, i) => `<span class="bar__label">${i % labelEvery === 0 || i === trend.length - 1 ? esc(t.label) : ''}</span>`)
+         .join('')}</div>`
+    : '<div class="empty">ไม่มีข้อมูล</div>';
+
+  const sorted = sortRows(rows, sort);
+  const maxRow = Math.max(1, ...sorted.map((r) => Number(r.issued)));
+  $('#reportList').innerHTML = sorted.length
+    ? sorted.map((r) => reportRow(r, maxRow)).join('')
+    : '<div class="empty">ไม่พบสินค้า</div>';
+}
+
+function sortRows(rows, sort) {
+  const list = [...rows];
+  if (sort === 'stock') list.sort((a, b) => Number(b.total_qty) - Number(a.total_qty) || a.name.localeCompare(b.name, 'th'));
+  else if (sort === 'name') list.sort((a, b) => a.name.localeCompare(b.name, 'th'));
+  else list.sort((a, b) => Number(b.issued) - Number(a.issued) || a.name.localeCompare(b.name, 'th'));
+  return list;
+}
+
+function reportRow(r, maxIssued) {
+  const pct = (Number(r.issued) / maxIssued) * 100;
+  const stockCls = stockClass(Number(r.total_qty), Number(r.min_qty));
+  return `<button class="item item--plain" data-product="${r.id}">
+    <div class="item__main">
+      <div class="item__name">${esc(r.name)}</div>
+      <div class="item__meta">
+        <span>${esc(r.sku)}</span>
+        ${r.category ? `<span>· ${esc(r.category)}</span>` : ''}
+        ${Number(r.received) ? `<span>· รับเข้า ${fmt(r.received)}</span>` : ''}
+        ${r.last_issue ? `<span>· ล่าสุด ${esc(r.last_issue)}</span>` : ''}
+      </div>
+      ${Number(r.issued) ? `<div class="rep-bar"><div class="rep-bar__fill" style="width:${pct}%"></div></div>` : ''}
+    </div>
+    <div class="item__qty">
+      <b class="${Number(r.issued) ? 'qty-issue' : 'qty-ok'}">${fmt(r.issued)}</b>
+      <span>เบิก ${esc(r.unit)}</span>
+      <span class="rep-stock qty-${stockCls}">เหลือ ${fmt(r.total_qty)}</span>
+    </div>
+  </button>`;
+}
+
+function downloadReportCsv() {
+  const { data, period, sort } = state.report;
+  if (!data) return;
+  const cell = (v) => {
+    const s = String(v ?? '');
+    return /[",\r\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const head = ['ชื่อสินค้า', 'รหัสสินค้า', 'หมวด', 'หน่วย', 'คงเหลือ', 'เบิกออก', 'รับเข้า', 'ปรับยอด', 'ย้ายคลัง', 'จำนวนครั้ง'];
+  const body = sortRows(data.rows, sort).map((r) =>
+    [r.name, r.sku, r.category ?? '', r.unit, r.total_qty, r.issued, r.received, r.adjusted, r.moved, r.movements]
+      .map(cell)
+      .join(','),
+  );
+  const csv = '\uFEFF' + [head.map(cell).join(','), ...body].join('\r\n');
+  const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `stock-report-${period}-${data.range.start}.csv`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  toast('ดาวน์โหลดไฟล์แล้ว', 'ok');
 }
 
 /* -------------------------------------------------------- bottom sheet */
@@ -677,18 +792,20 @@ async function scanAndOpen() {
 /* ----------------------------------------------------------- routing */
 
 function switchTab(tab) {
-  if (!['overview', 'products', 'history', 'settings'].includes(tab)) return;
+  if (!['overview', 'products', 'report', 'history', 'settings'].includes(tab)) return;
   state.tab = tab;
   $$('.view').forEach((v) => (v.hidden = v.dataset.view !== tab));
   $$('.tab[data-tab]').forEach((b) => b.classList.toggle('is-active', b.dataset.tab === tab));
   $('#topbarSubtitle').textContent = {
     overview: 'ภาพรวมวันนี้',
     products: 'รายการสินค้าทั้งหมด',
+    report: 'สรุปการเบิกและคงเหลือ',
     history: 'ประวัติการเคลื่อนไหว',
     settings: 'ตั้งค่าระบบ',
   }[tab];
   window.scrollTo({ top: 0, behavior: 'smooth' });
   if (tab === 'history') renderHistory();
+  if (tab === 'report') renderReport();
 }
 
 /* ---------------------------------------------------------- listeners */
@@ -752,6 +869,35 @@ document.addEventListener('click', (e) => {
     $$('#historyChips .chip').forEach((c) => c.classList.toggle('is-active', c === hChip));
     return renderHistory();
   }
+
+  const per = e.target.closest('#reportPeriod button');
+  if (per) {
+    state.report.period = per.dataset.period;
+    state.report.offset = 0;
+    return renderReport();
+  }
+
+  const sChip = e.target.closest('#reportSort .chip');
+  if (sChip) {
+    state.report.sort = sChip.dataset.sort;
+    return paintReport();
+  }
+
+  const kBtn = e.target.closest('#reportKind button');
+  if (kBtn) {
+    state.report.kind = kBtn.dataset.kind;
+    return paintReport();
+  }
+
+  if (e.target.closest('#reportPrev')) {
+    state.report.offset += 1;
+    return renderReport();
+  }
+  if (e.target.closest('#reportNext')) {
+    state.report.offset = Math.max(0, state.report.offset - 1);
+    return renderReport();
+  }
+  if (e.target.closest('#reportCsv')) return downloadReportCsv();
 });
 
 let searchTimer;

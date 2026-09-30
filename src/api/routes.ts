@@ -132,6 +132,15 @@ api.get('/movements', async (c) => {
   return c.json(await repo.listMovements(c.env.DB, { productId, locationId, limit }));
 });
 
+/* -------------------------------------------------------------- รายงาน */
+
+api.get('/report', async (c) => {
+  const p = c.req.query('period');
+  const period: repo.ReportPeriod = p === 'week' || p === 'year' ? p : 'month';
+  const offset = Math.min(600, Math.max(0, Number(c.req.query('offset') ?? 0) || 0));
+  return c.json(await repo.stockReport(c.env.DB, period, offset));
+});
+
 api.post('/movements', async (c) => {
   const body = await c.req.json<{
     action: 'issue' | 'receive' | 'adjust' | 'transfer';

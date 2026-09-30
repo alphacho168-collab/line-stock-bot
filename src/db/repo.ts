@@ -599,6 +599,217 @@ export async function getSummary(db: D1Database): Promise<Summary> {
   );
 }
 
+/* --------------------------------------------------------------- รายงาน */
+
+export type ReportPeriod = 'week' | 'month' | 'year';
+
+const TH_MONTHS = [
+  'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
+  'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม',
+];
+
+/** ชื่อเดือนแบบย่อสำหรับกราฟ (ใช้เลข 1-12 เรียงตามลำดับข้างบน) */
+const TH_MONTHS_SHORT = [
+  'ม.ค.', 'ก.พ.', 'มี.ค.', 'เม.ย.', 'พ.ค.', 'มิ.ย.',
+  'ก.ค.', 'ส.ค.', 'ก.ย.', 'ต.ค.', 'พ.ย.', 'ธ.ค.',
+];
+
+const DAY_MS = 86_400_000;
+
+/** "เวลาไทย" = UTC + 7 ชั่วโมง — Cloudflare เก็บ created_at เป็น UTC */
+function thNow(): Date {
+  return new Date(Date.now() + 7 * 3_600_000);
+}
+const pad2 = (n: number) => String(n).padStart(2, '0');
+const ymd = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`;
+/** 2026-09-30 -> "30 ก.ย." */
+function thShortDate(s: string): string {
+  const [, m, d] = s.split('-');
+  return `${Number(d)} ${TH_MONTHS_SHORT[Number(m) - 1]}`;
+}
+
+export interface ReportRange {
+  period: ReportPeriod;
+  offset: number;
+  start: string;
+  end: string;
+  label: string;
+  sub: string;
+  bucket: 'day' | 'month';
+  /** ย้อนหลังได้อีกไหม */
+  canPrev: boolean;
+  /** ไปข้างหน้าได้ไหม (ห้ามเกินช่วงปัจจุบัน) */
+  canNext: boolean;
+}
+
+/** คำนวณช่วงเวลาของรายงาน — offset 0 = ช่วงล่าสุด, 1 = ช่วงก่อนหน้า */
+export function reportRange(period: ReportPeriod, offset: number): ReportRange {
+  // จำกัดไว้ 600 ช่วง (ย้อนหลังราว 11 ปี) กันค่าเกินจนคำนวณวันที่เพี้ยน
+  const n = Math.min(600, Math.max(0, Math.trunc(Number(offset) || 0)));
+  const now = thNow();
+  const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+
+  if (period === 'week') {
+    const endMs = todayUtc - n * 7 * DAY_MS;
+    const start = ymd(new Date(endMs - 6 * DAY_MS));
+    const end = ymd(new Date(endMs));
+    return {
+      period, offset: n, start, end, bucket: 'day',
+      label: n === 0 ? '7 วันล่าสุด' : `7 วันที่ ${thShortDate(start)}`,
+      sub: `${thShortDate(start)} – ${thShortDate(end)}`,
+      canPrev: n < 600, canNext: n > 0,
+    };
+  }
+
+  if (period === 'month') {
+    const base = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - n, 1));
+    const y = base.getUTCFullYear();
+    const m = base.getUTCMonth();
+    const start = ymd(base);
+    const end = ymd(new Date(Date.UTC(y, m + 1, 0)));
+    return {
+      period, offset: n, start, end, bucket: 'day',
+      label: `${TH_MONTHS[m]} ${y + 543}`,
+      sub: `${start} ถึง ${end}`,
+      canPrev: true, canNext: n > 0,
+    };
+  }
+
+  const y = now.getUTCFullYear() - n;
+  return {
+    period, offset: n, start: `${y}-01-01`, end: `${y}-12-31`, bucket: 'month',
+    label: `ปี ${y + 543}`,
+    sub: `${y}-01-01 ถึง ${y}-12-31`,
+    canPrev: true, canNext: n > 0,
+  };
+}
+
+export interface ReportRow {
+  id: number;
+  sku: string;
+  name: string;
+  unit: string;
+  category: string | null;
+  min_qty: number;
+  total_qty: number;
+  issued: number;
+  received: number;
+  adjusted: number;
+  moved: number;
+  movements: number;
+  last_issue: string | null;
+}
+
+export interface ReportBucket {
+  key: string;
+  label: string;
+  issued: number;
+  received: number;
+}
+
+export interface StockReport {
+  range: ReportRange;
+  rows: ReportRow[];
+  trend: ReportBucket[];
+  totals: {
+    products: number;
+    units: number;
+    issued: number;
+    received: number;
+    adjusted: number;
+    moved: number;
+    issuedProducts: number;
+  };
+}
+
+/** สร้างช่องเวลาครบทุกช่องในช่วง (เพื่อให้กราฟไม่มีวันที่หายไป) */
+function reportBuckets(range: ReportRange): ReportBucket[] {
+  const out: ReportBucket[] = [];
+  if (range.bucket === 'month') {
+    for (let m = 1; m <= 12; m++) {
+      out.push({
+        key: `${range.start.slice(0, 4)}-${pad2(m)}`,
+        label: TH_MONTHS_SHORT[m - 1],
+        issued: 0, received: 0,
+      });
+    }
+    return out;
+  }
+  for (let t = Date.parse(`${range.start}T00:00:00Z`); t <= Date.parse(`${range.end}T00:00:00Z`); t += DAY_MS) {
+    const key = ymd(new Date(t));
+    out.push({ key, label: `${Number(key.slice(8, 10))}`, issued: 0, received: 0 });
+  }
+  return out;
+}
+
+/**
+ * รายงานสรุป: คงเหลือ + จำนวนที่เบิก/รับ/ปรับ/ย้าย แยกตามสินค้าในช่วงเวลาที่เลือก
+ * หมายเหตุ: ตัวเลขคงเหลือเป็นยอด "ตอนนี้" เสมอ ไม่ใช่ยอด ณ วันที่สิ้นสุดช่วง
+ */
+export async function stockReport(db: D1Database, period: ReportPeriod, offset: number): Promise<StockReport> {
+  const range = reportRange(period, offset);
+
+  const { results: rows } = await db
+    .prepare(
+      `SELECT p.id, p.sku, p.name, p.unit, p.category, p.min_qty,
+              COALESCE((SELECT SUM(s.qty) FROM stock_levels s WHERE s.product_id = p.id), 0) AS total_qty,
+              COALESCE(SUM(CASE WHEN m.type = 'issue'        THEN m.qty  END), 0) AS issued,
+              COALESCE(SUM(CASE WHEN m.type = 'receive'      THEN m.qty  END), 0) AS received,
+              COALESCE(SUM(CASE WHEN m.type = 'adjust'       THEN ABS(m.delta) END), 0) AS adjusted,
+              COALESCE(SUM(CASE WHEN m.type = 'transfer_out' THEN m.qty  END), 0) AS moved,
+              COUNT(m.id) AS movements,
+              MAX(CASE WHEN m.type = 'issue' THEN date(m.created_at, '+7 hours') END) AS last_issue
+       FROM products p
+       LEFT JOIN movements m
+              ON m.product_id = p.id
+             AND date(m.created_at, '+7 hours') BETWEEN ? AND ?
+       WHERE p.active = 1
+       GROUP BY p.id
+       ORDER BY issued DESC, p.name`,
+    )
+    .bind(range.start, range.end)
+    .all<ReportRow>();
+  const list = rows ?? [];
+
+  const bucketExpr =
+    range.bucket === 'month'
+      ? `strftime('%Y-%m', date(created_at, '+7 hours'))`
+      : `date(created_at, '+7 hours')`;
+  const { results: rawTrend } = await db
+    .prepare(
+      `SELECT ${bucketExpr} AS key,
+              COALESCE(SUM(CASE WHEN type = 'issue'   THEN qty END), 0) AS issued,
+              COALESCE(SUM(CASE WHEN type = 'receive' THEN qty END), 0) AS received
+       FROM movements
+       WHERE date(created_at, '+7 hours') BETWEEN ? AND ?
+       GROUP BY key`,
+    )
+    .bind(range.start, range.end)
+    .all<{ key: string; issued: number; received: number }>();
+
+  const map = new Map((rawTrend ?? []).map((t) => [t.key, t]));
+  const trend = reportBuckets(range).map((b) => ({
+    ...b,
+    issued: Number(map.get(b.key)?.issued ?? 0),
+    received: Number(map.get(b.key)?.received ?? 0),
+  }));
+
+  return {
+    range,
+    rows: list,
+    trend,
+    totals: {
+      products: list.length,
+      units: list.reduce((s, r) => s + Number(r.total_qty), 0),
+      issued: list.reduce((s, r) => s + Number(r.issued), 0),
+      received: list.reduce((s, r) => s + Number(r.received), 0),
+      adjusted: list.reduce((s, r) => s + Number(r.adjusted), 0),
+      moved: list.reduce((s, r) => s + Number(r.moved), 0),
+      issuedProducts: list.filter((r) => Number(r.issued) > 0).length,
+    },
+  };
+}
+
 /* ---------------------------------------------------------------- drafts */
 
 const DRAFT_TTL_MS = 10 * 60 * 1000;
